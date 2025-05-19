@@ -3,7 +3,13 @@ import aiofiles
 from pathlib import Path
 import asyncio
 import aiohttp
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Literal, Dict
+from datetime import datetime
+from moviepy.editor import VideoFileClip
+from PIL import Image
+import os
+import time
+from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
 
 
 async def fetch_and_save(url: str, filename: str, max_size_mb: int = 50) -> None:
@@ -57,48 +63,46 @@ async def fetch_and_save(url: str, filename: str, max_size_mb: int = 50) -> None
             raise ValueError(f"Download failed: {str(e)}") from e
 
 
-def determine_media_type(filename: Optional[str]) -> str:
-    """Определяет тип медиа по расширению файла"""
+def determine_media_type(
+    filename: Optional[str],
+) -> Optional[Literal["video", "audio", "photo"]]:
+    """Определяет тип медиафайла по его расширению."""
     if not filename:
-        return "unknown"
+        return None
 
-    # Словарь соответствий расширений типам медиа
-    extension_map = {
-        # Видео
+    extension_map: Dict[str, Literal["video", "audio", "photo"]] = {
         "mp4": "video",
         "mov": "video",
         "avi": "video",
         "mkv": "video",
         "webm": "video",
         "flv": "video",
-        # Аудио
+        "gif": "video",
         "mp3": "audio",
         "wav": "audio",
         "ogg": "audio",
         "m4a": "audio",
         "flac": "audio",
         "aac": "audio",
-        # Изображения
         "jpg": "photo",
         "jpeg": "photo",
         "png": "photo",
-        "gif": "gif",
         "webp": "photo",
         "bmp": "photo",
     }
 
     try:
         ext = filename.split(".")[-1].lower()
-        return extension_map.get(ext, "unknown")
+        return extension_map.get(ext)
     except Exception:
-        return "unknown"
+        return None
 
 
 async def fetch_cobalt_links(
     media_url: str,
     api_url: str = "http://localhost:9000/",
     timeout: int = 30,
-) -> List[Tuple[str, str]]:
+) -> List[Tuple[str, str]] | None:
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     payload = {"url": media_url, "videoQuality": "720", "downloadMode": "auto"}
 
@@ -106,31 +110,65 @@ async def fetch_cobalt_links(
         timeout=aiohttp.ClientTimeout(total=timeout)
     ) as session:
         async with session.post(api_url, headers=headers, json=payload) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise ValueError(f"API returned {response.status}: {error_text}")
-            data = await response.json()
-            if data["status"] in ("redirect", "tunnel"):
-                media_type = determine_media_type(data["filename"])
-                return [(media_type, data["url"])]
-            elif data["status"] == "picker":
-                return [(item["type"], item["url"]) for item in data["picker"]]
-            elif data["status"] == "error":
-                raise ValueError(f"Cobalt API error: {data['error']['code']}")
-            raise ValueError(f"Unknown response status: {data['status']}")
+            # if response.status != 200:
+            #     error_text = await response.text()
+            #     raise ValueError(f"API returned {response.status}: {error_text}")
+            if response.status == 200:
+                data = await response.json()
+                if data["status"] in ("redirect", "tunnel"):
+                    media_type = determine_media_type(data["filename"])
+                    if media_type:
+                        return [(media_type, data["url"])]
+                elif data["status"] == "picker":
+                    return [(item["type"], item["url"]) for item in data["picker"]]
+            # elif data["status"] == "error":
+            #     raise ValueError(f"Cobalt API error: {data['error']['code']}")
+            # raise ValueError(f"Unknown response status: {data['status']}")
+            return None
+
+
+def calculate_video_params(direct_link: str):
+    with VideoFileClip(direct_link) as video:
+        duration = int(video.duration)
+        width, height = video.size
+
+        # Создание миниатюры
+        frame = video.get_frame(int(duration / 2))  # Кадр из середины видео
+        image = Image.fromarray(frame)
+        image.thumbnail((320, 320), Image.Resampling.LANCZOS)
+
+        # Сохранение миниатюры с контролем качества
+        thumbnail_filename = f"t_{int(time.time())}"
+        quality = 85
+        while True:
+            image.save(thumbnail_filename, format="JPEG", quality=quality)
+            if os.path.getsize(thumbnail_filename) <= 200 * 1024:
+                break
+            quality = max(
+                10, quality - 5
+            )  # Уменьшаем качество, если файл слишком большой
+
+        return {
+            "video": FSInputFile(direct_link),
+            "duration": duration,
+            "width": width,
+            "height": height,
+            "thumbnail": FSInputFile(thumbnail_filename),
+        }
 
 
 def syncfunc():
     async def asyncfunc():
-        print(await fetch_cobalt_links("https://www.instagram.com/p/DJrajw5JF22/"))
-
-        # await fetch_and_save(
-        #     url="http://localhost:9000/tunnel?id=rmBEYTo_u0ekU9oKxrdZG&exp=1747317723080&sig=W-IUa0xsltO8uxO5Ko_Y95sQ1GYeQvjiL0nux1jMTVw&sec=Yotyuahw-fPZKFLty_DYCW4K5zPFrIQq8ZhTbovqRd4&iv=kuaNnaff8WNtVtZjMOZvLA",
-        #     filename="tiktok_kireev_voice_7504644103678741768.mp4",
-        #     max_size_mb=100,  # Лимит 100 MB
-        # )
+        links = await fetch_cobalt_links("https://www.youtube.com/watch?v=obc6n9U0s1E")
+        for link in links:
+            print(link)
+            await fetch_and_save(
+                url=link[1],
+                filename=f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{'jpg' if link[0] == 'photo' else 'mp4'}",
+                max_size_mb=50,
+            )
 
     asyncio.run(asyncfunc())
 
 
-syncfunc()
+# syncfunc()
