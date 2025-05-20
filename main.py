@@ -9,11 +9,16 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from datetime import datetime
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
-from utils import fetch_cobalt_links, fetch_and_save, calculate_video_params
+from utils import (
+    fetch_cobalt_links,
+    fetch_and_save,
+    calculate_video_params,
+    aio_fetch_and_save,
+)
 
 
 # Bot token can be obtained via https://t.me/BotFather
-TOKEN = "8151251504:AAGelzy_QixoiBsEfGwRmo6Bawup2ADUrLo"
+TOKEN = "8151251504:AAGPh5ZrErpjfeIm62kKnycUu-QREFoh1gc"
 
 
 dp = Dispatcher()
@@ -38,14 +43,14 @@ async def echo_handler(message: Message) -> None:
     if res:
         if len(res) == 1:
             for url in res:
-                # await message.answer(f"• Ссылка: {url[0]}\n  Описание: {url[1]}")
-                direct_link = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-                await fetch_and_save(url[1], direct_link)
-                if url[0] == "video":
-                    params = calculate_video_params(direct_link)
-                    await message.answer_video(**params)
-                elif url[0] == "photo":
-                    await message.answer_photo(FSInputFile(direct_link))
+                async with aio_fetch_and_save(url[1]) as temp_file:
+                    if url[0] == "video":
+                        print(1)
+                        params = calculate_video_params(temp_file.name)
+                        print(2)
+                        await message.answer_video(**params)
+                    elif url[0] == "photo":
+                        await message.answer_photo(FSInputFile(temp_file.name))
         elif len(res) > 1:
             for i in range(0, len(res), 10):
                 batch = res[i : i + 10]

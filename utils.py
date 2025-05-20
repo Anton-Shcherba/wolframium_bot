@@ -10,6 +10,55 @@ from PIL import Image
 import os
 import time
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
+import tempfile
+from anyio import NamedTemporaryFile
+from anyio.streams.file import FileWriteStream
+import httpx
+from contextlib import asynccontextmanager
+import anyio
+
+
+@asynccontextmanager
+async def aio_fetch_and_save(url: str, max_size_mb: int = 50):
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip, deflate, br",
+    }
+    MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Проверка размера  через HEAD
+            head = await client.head(url, headers=HEADERS, follow_redirects=True)
+            head.raise_for_status()
+
+            if int(head.headers.get("Content-Length", 0)) > MAX_SIZE_BYTES:
+                raise ValueError("Size limit exceeded")
+
+            # Создаём временный файл
+            async with NamedTemporaryFile("wb", delete=False) as temp_file:
+                temp_file.name
+                # Потоковая загрузка
+                downloaded = 0
+                async with client.stream(
+                    "GET", url, headers=HEADERS, follow_redirects=True
+                ) as response:
+                    response.raise_for_status()
+
+                    async for chunk in response.aiter_bytes():
+                        await temp_file.write(chunk)
+                        downloaded += len(chunk)
+                        if downloaded > MAX_SIZE_BYTES:
+                            raise ValueError("Size limit exceeded")
+
+                # Возвращаем временный файл (будет автоматически закрыт)
+                yield temp_file
+
+    except httpx.HTTPStatusError as e:
+        raise ValueError(f"HTTP error: {e.response.status_code}") from e
+    except Exception as e:
+        raise ValueError(f"Download failed: {str(e)}")
 
 
 async def fetch_and_save(url: str, filename: str, max_size_mb: int = 50) -> None:
@@ -132,43 +181,42 @@ def calculate_video_params(direct_link: str):
         duration = int(video.duration)
         width, height = video.size
 
-        # Создание миниатюры
-        frame = video.get_frame(int(duration / 2))  # Кадр из середины видео
-        image = Image.fromarray(frame)
-        image.thumbnail((320, 320), Image.Resampling.LANCZOS)
+        # Создание миниатюры с использованием временного файла
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_thumb:
+            frame = video.get_frame(int(duration / 2))  # Кадр из середины видео
+            image = Image.fromarray(frame)
+            image.thumbnail((320, 320), Image.Resampling.LANCZOS)
 
-        # Сохранение миниатюры с контролем качества
-        thumbnail_filename = f"t_{int(time.time())}"
-        quality = 85
-        while True:
-            image.save(thumbnail_filename, format="JPEG", quality=quality)
-            if os.path.getsize(thumbnail_filename) <= 200 * 1024:
-                break
-            quality = max(
-                10, quality - 5
-            )  # Уменьшаем качество, если файл слишком большой
-
-        return {
-            "video": FSInputFile(direct_link),
-            "duration": duration,
-            "width": width,
-            "height": height,
-            "thumbnail": FSInputFile(thumbnail_filename),
-        }
+            # Сохранение миниатюры с контролем качества
+            quality = 85
+            while True:
+                # Уменьшаем качество, если файл слишком большой
+                image.save(temp_thumb.name, format="JPEG", quality=quality)
+                if os.path.getsize(temp_thumb.name) <= 200 * 1024:
+                    break
+                quality = max(10, quality - 5)
+            print(temp_thumb.name)
+            return {
+                "video": FSInputFile(direct_link),
+                "duration": duration,
+                "width": width,
+                "height": height,
+                "thumbnail": FSInputFile(temp_thumb.name),
+            }
 
 
-def syncfunc():
-    async def asyncfunc():
-        links = await fetch_cobalt_links("https://www.youtube.com/watch?v=obc6n9U0s1E")
-        for link in links:
-            print(link)
-            await fetch_and_save(
-                url=link[1],
-                filename=f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{'jpg' if link[0] == 'photo' else 'mp4'}",
-                max_size_mb=50,
-            )
+# def syncfunc():
+#     async def asyncfunc():
+#         links = await fetch_cobalt_links("https://www.youtube.com/watch?v=obc6n9U0s1E")
+#         for link in links:
+#             print(link)
+#             await fetch_and_save(
+#                 url=link[1],
+#                 filename=f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}.{'jpg' if link[0] == 'photo' else 'mp4'}",
+#                 max_size_mb=50,
+#             )
 
-    asyncio.run(asyncfunc())
+#     asyncio.run(asyncfunc())
 
 
 # syncfunc()
