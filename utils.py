@@ -5,21 +5,19 @@ import asyncio
 import aiohttp
 from typing import List, Tuple, Optional, Literal, Dict
 from datetime import datetime
-from moviepy.editor import VideoFileClip
+from moviepy import VideoFileClip
 from PIL import Image
 import os
 import time
 from aiogram.types import FSInputFile, InputMediaPhoto, InputMediaVideo
 import tempfile
-from anyio import NamedTemporaryFile
-from anyio.streams.file import FileWriteStream
-import httpx
 from contextlib import asynccontextmanager
-import anyio
+import io
+import cv2
 
 
 @asynccontextmanager
-async def aio_fetch_and_save(url: str, max_size_mb: int = 50):
+async def fetch_and_save_async(url: str, max_size_mb: int = 50):
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         "Accept": "*/*",
@@ -30,35 +28,72 @@ async def aio_fetch_and_save(url: str, max_size_mb: int = 50):
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             # Проверка размера  через HEAD
-            head = await client.head(url, headers=HEADERS, follow_redirects=True)
-            head.raise_for_status()
+            if head := await client.head(url, headers=HEADERS, follow_redirects=True):
+                if int(head.headers.get("Content-Length", 0)) > MAX_SIZE_BYTES:
+                    raise ValueError("Size limit exceeded")
 
-            if int(head.headers.get("Content-Length", 0)) > MAX_SIZE_BYTES:
-                raise ValueError("Size limit exceeded")
-
-            # Создаём временный файл
-            async with NamedTemporaryFile("wb", delete=False) as temp_file:
-                temp_file.name
-                # Потоковая загрузка
+            # Потоковая загрузка во временный файл
+            async with aiofiles.tempfile.NamedTemporaryFile("wb") as temp_file:
                 downloaded = 0
                 async with client.stream(
                     "GET", url, headers=HEADERS, follow_redirects=True
                 ) as response:
                     response.raise_for_status()
-
                     async for chunk in response.aiter_bytes():
                         await temp_file.write(chunk)
-                        downloaded += len(chunk)
-                        if downloaded > MAX_SIZE_BYTES:
+                        if (downloaded := downloaded + len(chunk)) > MAX_SIZE_BYTES:
                             raise ValueError("Size limit exceeded")
 
-                # Возвращаем временный файл (будет автоматически закрыт)
                 yield temp_file
 
     except httpx.HTTPStatusError as e:
         raise ValueError(f"HTTP error: {e.response.status_code}") from e
     except Exception as e:
         raise ValueError(f"Download failed: {str(e)}")
+
+
+@asynccontextmanager
+async def get_video_info_async(video_path: str):
+    # Синхронная операция
+    def sync_operations():
+        print(1)
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        _, first_frame = cap.read()
+        return (
+            frame_count / fps if fps > 0 else 0,
+            int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            first_frame,
+        )
+        # with VideoFileClip(video_path) as clip:
+        #     print(2)
+        #     buffer = io.BytesIO()
+        #     clip.save_frame(buffer, format="jpeg")
+        #     return (
+        #         clip.duration,
+        #         clip.size,
+        #         buffer.getvalue(),
+        #     )
+
+    # Cинхронная операция в отдельном потоке
+    duration, width, height, thumbnail_data = await asyncio.to_thread(sync_operations)
+
+    async with aiofiles.tempfile.NamedTemporaryFile("wb") as temp_file:
+        _, buffer = cv2.imencode(".jpg", thumbnail_data)
+        await temp_file.write(buffer.tobytes())
+
+        print(str(temp_file.name))
+        time.sleep(1000)
+        yield {
+            "video": FSInputFile(video_path),
+            "duration": duration,
+            "width": width,
+            "height": height,
+            "thumbnail": FSInputFile(str(temp_file.name)),
+        }
 
 
 async def fetch_and_save(url: str, filename: str, max_size_mb: int = 50) -> None:
@@ -220,3 +255,25 @@ def calculate_video_params(direct_link: str):
 
 
 # syncfunc()
+
+
+async def process_downloaded_file():
+    url = "https://drive.usercontent.google.com/u/0/uc?id=1c3GLj3RbRm65A4R21NhBbOX2FjjcrYNf&export=download"  # Замените на реальный URL
+
+    try:
+        # Используем контекстный менеджер для загрузки
+        async with fetch_and_save_async(url) as file:
+            print(f"file: {file.name}")
+            file_size = Path(str(file.name)).stat().st_size
+            print(f"size: {file_size / (1024 * 1024):.2f} MB")
+            async with get_video_info_async(str(file.name)) as param:
+                print(param)
+
+    except ValueError as e:
+        print(f"Ошибка загрузки: {e}")
+    except Exception as e:
+        print(f"Неожиданная ошибка: {e}")
+
+
+# Запуск
+asyncio.run(process_downloaded_file())
