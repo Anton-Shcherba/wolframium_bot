@@ -52,7 +52,7 @@ async def get_video_info_from_buffer_async(buffer: BytesIO):
             fps = cap.get(cv2.CAP_PROP_FPS)
             _, first_frame = cap.read()
             frame_count = sum(1 for _ in iter(cap.grab, False))
-            duration = round(frame_count / fps) if fps > 0 else 0
+            duration = round(frame_count / (fps if fps > 0 else 30))
             return duration, width, height, first_frame
         finally:
             cap.release()
@@ -69,9 +69,7 @@ async def get_video_info_from_buffer_async(buffer: BytesIO):
             "duration": duration,
             "width": width,
             "height": height,
-            "thumbnail": BufferedInputFile(
-                buffer_img.tobytes(), filename="thumbnail.jpg"
-            ),
+            "thumbnail": BufferedInputFile(buffer_img.tobytes(), filename="thumb.jpg"),
         }
 
 

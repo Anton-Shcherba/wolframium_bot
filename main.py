@@ -14,7 +14,7 @@ from utils import (
 
 from aiogram.types import BufferedInputFile
 
-# Bot token can be obtained via https://t.me/BotFather
+
 TOKEN = " "
 
 
@@ -40,37 +40,24 @@ async def echo_handler(message: Message) -> None:
     if res:
         status_msg = await message.reply("⏳ Обработка медиафайлов...")
         try:
-            size = len(res)
-            for i in range(0, len(res), 10):
-                batch = res[i : i + 10]
-                media_group = []
-                for item in batch:
+            for i in range(0, size := len(res), 10):
+                group = []
+                for item in res[i : i + 10]:
                     async with fetch_to_buffer_async(item[1]) as buffer:
                         if item[0] == "video":
-                            async with get_video_info_from_buffer_async(
-                                buffer
-                            ) as params:
+                            async with get_video_info_from_buffer_async(buffer) as data:
                                 if size == 1:
-                                    await message.reply_video(**params)
+                                    await message.reply_video(**data)
                                     return
-                                media_group.append(
-                                    InputMediaVideo(
-                                        media=params["video"],
-                                        duration=params["duration"],
-                                        width=params["width"],
-                                        height=params["height"],
-                                        thumbnail=params["thumbnail"],
-                                    )
-                                )
+                                video = InputMediaVideo(media=data.pop("video"), **data)
+                                group.append(video)
                         elif item[0] == "photo":
-                            file = BufferedInputFile(
-                                buffer.read(), filename="photo.jpg"
-                            )
+                            file = BufferedInputFile(buffer.read(), filename="img.jpg")
                             if size == 1:
                                 await message.reply_photo(file)
                                 return
-                            media_group.append(InputMediaPhoto(media=file))
-                await message.reply_media_group(media_group)
+                            group.append(InputMediaPhoto(media=file))
+                await message.reply_media_group(group)
         except Exception:
             await message.reply("❌ Ошибка")
         finally:
